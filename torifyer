@@ -1,0 +1,83 @@
+#!/bin/bash
+
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+#Import settings and set default values
+source /etc/torifyer/torifyer.conf
+
+ACTION="A";
+ATXT="Initializing"
+
+if [ $1 ]; then
+	if [ "$1" == "--delete" ]; then
+		ACTION="D";
+		ATXT="Removing";
+	fi
+fi
+
+if [ -z $TOR_UID ]; then 
+    TOR_UID=`ps -o uid,cmd -ax | grep "/tor " | grep -v "grep" | awk '{print $1}'`; 
+fi
+
+if [ -z $NON_TOR ]; then
+    NETMASK=`netstat -rn | grep '^\(default\|0\.0\.0\.0\)' | awk '{print $8}'`;
+    NETIP=`netstat -rn | grep '^\(default\|0\.0\.0\.0\)' | awk '{print $2}'`;
+    NON_TOR=`ipcalc $NETIP $NETMASK | grep "Network:" | awk '{print $2}'`;
+fi
+
+if [ -z $TRANS_PORT ]; then
+    TRANS_PORT=9040;
+fi
+
+#Check if firewall rules are set
+ISSET=`iptables -L | grep "TORIFIED"`;
+
+if [[ ( "$ISSET" ) && ( "$ACTION" == "A" ) ]]; then
+	echo "Tor forwarding rules are allready set. Please use --delete to remove them first.";
+	BLOCKED=true;
+fi
+
+if [[ ( -z $ISSET ) && ( "$ACTION" == "D" ) ]]; then
+	echo "Tor forwarding rules are not set. Nothing done.";
+	BLOCKED=true;
+fi
+
+#Main Part
+if [ -z $BLOCKED ]; then
+    # Initialize / remove the scripts.
+    echo "$ATXT Tor forwarding scripts";
+    iptables -$ACTION OUTPUT -m comment --comment "TORIFIED";
+    iptables -$ACTION OUTPUT -m state --state INVALID -j DROP
+    iptables -$ACTION OUTPUT -m conntrack --ctstate INVALID -j DROP
+    iptables -$ACTION OUTPUT ! -o lo ! -d 127.0.0.1 ! -s 127.0.0.1 -p tcp -m tcp --tcp-flags ACK,FIN ACK,FIN -j DROP
+    iptables -$ACTION OUTPUT ! -o lo ! -d 127.0.0.1 ! -s 127.0.0.1 -p tcp -m tcp --tcp-flags ACK,RST ACK,RST -j DROP
+
+    iptables -t nat -$ACTION OUTPUT -m owner --uid-owner $TOR_UID -j RETURN
+    iptables -t nat -$ACTION OUTPUT -p udp --dport 53 -j REDIRECT --to-ports 53
+
+    for NET in $NON_TOR 127.0.0.0/9 127.128.0.0/10; do
+      iptables -t nat -$ACTION OUTPUT -d $NET -j RETURN
+    done
+
+    iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports $TRANS_PORT
+    iptables -$ACTION OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+    for NET in $NON_TOR 127.0.0.0/8; do
+      iptables -$ACTION OUTPUT -d $NET -j ACCEPT
+    done
+
+    iptables -$ACTION OUTPUT -m owner --uid-owner $TOR_UID -j ACCEPT
+    iptables -$ACTION OUTPUT -j DROP
+    echo "Done."
+fi
