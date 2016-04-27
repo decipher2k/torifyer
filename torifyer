@@ -71,7 +71,7 @@ if [ -z $BLOCKED ]; then
       iptables -t nat -$ACTION OUTPUT -d $NET -j RETURN
     done
 
-    iptables -t nat -A OUTPUT -p tcp --syn -j REDIRECT --to-ports $TRANS_PORT
+    iptables -t nat -$ACTION OUTPUT -p tcp --syn -j REDIRECT --to-ports $TRANS_PORT
     iptables -$ACTION OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
     for NET in $NON_TOR 127.0.0.0/8; do
